@@ -1,1 +1,1 @@
-# Fr-quence-Soleil
+# Frequence-Soleil.ch
