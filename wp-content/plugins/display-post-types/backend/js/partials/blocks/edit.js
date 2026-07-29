@@ -4,7 +4,7 @@ const { InspectorControls } = wp.blockEditor;
 const { apiFetch } = wp;
 const { PanelColorSettings } = wp.editor;
 const ServerSideRender = wp.serverSideRender;
-const { TextControl, SelectControl, RangeControl, ToggleControl, Disabled } = wp.components;
+const { TextControl, SelectControl, RangeControl, ToggleControl, Disabled, Button } = wp.components;
 
 import MultipleCheckboxControl from './mcc';
 import DptAccordion from './components/dpt-accordion';
@@ -22,8 +22,10 @@ class DisplayPostTypes extends Component {
 			termsList: [],
 			styleList: [],
 			customFields: [],
+			advancedTerms: {},
 		};
 		this.fetching = false;
+		this.advancedTermsFetching = {};
 		this.styleSupport = {};
 		this.elemRef = createRef();
 		this.isPro = this.props.isPro || false;
@@ -69,6 +71,7 @@ class DisplayPostTypes extends Component {
 			} else {
 				this.updateTaxonomy();
 				this.updateTerms();
+				this.syncAdvancedTaxonomyTerms(attributes.queryTaxClauses);
 			}
 
 			if ( this.isPro ) {
@@ -94,6 +97,9 @@ class DisplayPostTypes extends Component {
 		}
 
 		if (oldTaxonomy !== taxonomy) { this.updateTerms() }
+		if (prevProps.attributes.queryTaxClauses !== this.props.attributes.queryTaxClauses) {
+			this.syncAdvancedTaxonomyTerms(this.props.attributes.queryTaxClauses);
+		}
 	}
 
 	updateTaxonomy() {
@@ -114,6 +120,55 @@ class DisplayPostTypes extends Component {
 		} else {
 			this.apiDataFetch('termsList', 'terms/' + taxonomy);
 		}
+	}
+
+	fetchAdvancedTerms(taxonomy) {
+		const { advancedTerms } = this.state;
+		if (!taxonomy || advancedTerms[taxonomy] || this.advancedTermsFetching[taxonomy]) {
+			return;
+		}
+
+		this.advancedTermsFetching[taxonomy] = true;
+		apiFetch( {
+			path: '/dpt/v1/terms/' + taxonomy,
+		} )
+		.then( ( items ) => {
+			let terms = Object.keys(items);
+			terms = terms.map(item => {
+				return {
+					label: items[item],
+					value: item,
+				};
+			});
+			this.setState({
+				advancedTerms: {
+					...this.state.advancedTerms,
+					[taxonomy]: terms,
+				},
+			});
+			delete this.advancedTermsFetching[taxonomy];
+		} )
+		.catch( () => {
+			this.setState({
+				advancedTerms: {
+					...this.state.advancedTerms,
+					[taxonomy]: [],
+				},
+			});
+			delete this.advancedTermsFetching[taxonomy];
+		} );
+	}
+
+	syncAdvancedTaxonomyTerms(clauses) {
+		if (!Array.isArray(clauses)) {
+			return;
+		}
+
+		clauses.forEach((clause) => {
+			if (clause && clause.taxonomy) {
+				this.fetchAdvancedTerms(clause.taxonomy);
+			}
+		});
 	}
 
 	getPagesList() {
@@ -275,7 +330,7 @@ class DisplayPostTypes extends Component {
 	}
 
 	render() {
-		const { postTypes, taxonomies, pageList, termsList, styleList, customFields } = this.state;
+		const { postTypes, taxonomies, pageList, termsList, styleList, customFields, advancedTerms } = this.state;
 		const { attributes, setAttributes } = this.props;
 		const {
 			title,
@@ -283,6 +338,8 @@ class DisplayPostTypes extends Component {
 			taxonomy,
 			terms,
 			relation,
+			queryTaxRelation,
+			queryTaxClauses,
 			postIds,
 			pages,
 			number,
@@ -297,6 +354,8 @@ class DisplayPostTypes extends Component {
 			imgAlign,
 			brRadius,
 			colNarr,
+			colNarrTab,
+			colNarrMob,
 			plHolder,
 			titleShadow,
 			textAlign,
@@ -313,6 +372,7 @@ class DisplayPostTypes extends Component {
 		const onChangePostType = value => {
 			setAttributes({ terms: [] });
 			setAttributes({ taxonomy: '' });
+			setAttributes({ queryTaxClauses: [], queryTaxRelation: 'AND' });
 			setAttributes({ postType: value });
 		};
 		const onChangeTaxonomy = value => {
@@ -353,6 +413,56 @@ class DisplayPostTypes extends Component {
 			} else {
 				setAttributes({ terms: terms.filter(term => term !== value) });
 			}
+		};
+		const taxRules = Array.isArray(queryTaxClauses) ? queryTaxClauses : [];
+		const isAdvancedTaxonomy = 0 < taxRules.length;
+		const emptyTaxRule = () => ({
+			taxonomy: '',
+			field: 'slug',
+			terms: [],
+			operator: 'IN',
+		});
+		const setTaxRules = (rules) => {
+			setAttributes({ queryTaxClauses: rules });
+		};
+		const toggleAdvancedTaxonomy = (enabled) => {
+			if (enabled) {
+				setTaxRules(taxRules.length ? taxRules : [emptyTaxRule()]);
+			} else {
+				setAttributes({ queryTaxClauses: [], queryTaxRelation: 'AND' });
+			}
+		};
+		const updateTaxRule = (index, updates) => {
+			const rules = taxRules.map((rule, ruleIndex) => {
+				return ruleIndex === index ? { ...rule, ...updates } : rule;
+			});
+			setTaxRules(rules);
+		};
+		const addTaxRule = () => {
+			setTaxRules([...taxRules, emptyTaxRule()]);
+		};
+		const removeTaxRule = (index) => {
+			if (1 < taxRules.length) {
+				setTaxRules(taxRules.filter((rule, ruleIndex) => ruleIndex !== index));
+			} else {
+				setTaxRules([emptyTaxRule()]);
+			}
+		};
+		const onChangeTaxRuleTaxonomy = (index, value) => {
+			this.fetchAdvancedTerms(value);
+			updateTaxRule(index, {
+				taxonomy: value,
+				field: 'slug',
+				terms: [],
+			});
+		};
+		const onTaxRuleTermChange = (index, value) => {
+			const rule = taxRules[index] || emptyTaxRule();
+			const ruleTerms = Array.isArray(rule.terms) ? rule.terms : [];
+			const termIndex = ruleTerms.indexOf(value);
+			updateTaxRule(index, {
+				terms: -1 === termIndex ? [...ruleTerms, value] : ruleTerms.filter(term => term !== value),
+			});
 		};
 		const onStyleChange = (value) => {
 			const styleSupDefaults = {
@@ -632,11 +742,11 @@ class DisplayPostTypes extends Component {
 					<TabList>
 						<Tab
 							id={ 'titlegeneral' }
-							icon={<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M29.181 19.070c-1.679-2.908-0.669-6.634 2.255-8.328l-3.145-5.447c-0.898 0.527-1.943 0.829-3.058 0.829-3.361 0-6.085-2.742-6.085-6.125h-6.289c0.008 1.044-0.252 2.103-0.811 3.070-1.679 2.908-5.411 3.897-8.339 2.211l-3.144 5.447c0.905 0.515 1.689 1.268 2.246 2.234 1.676 2.903 0.672 6.623-2.241 8.319l3.145 5.447c0.895-0.522 1.935-0.82 3.044-0.82 3.35 0 6.067 2.725 6.084 6.092h6.289c-0.003-1.034 0.259-2.080 0.811-3.038 1.676-2.903 5.399-3.894 8.325-2.219l3.145-5.447c-0.899-0.515-1.678-1.266-2.232-2.226zM16 22.479c-3.578 0-6.479-2.901-6.479-6.479s2.901-6.479 6.479-6.479c3.578 0 6.479 2.901 6.479 6.479s-2.901 6.479-6.479 6.479z"></path></svg>}
+							icon={<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M10.825 22q-.675 0-1.162-.45t-.588-1.1L8.85 18.8q-.325-.125-.612-.3t-.563-.375l-1.55.65q-.625.275-1.25.05t-.975-.8l-1.175-2.05q-.35-.575-.2-1.225t.675-1.075l1.325-1Q4.5 12.5 4.5 12.337v-.675q0-.162.025-.337l-1.325-1Q2.675 9.9 2.525 9.25t.2-1.225L3.9 5.975q.35-.575.975-.8t1.25.05l1.55.65q.275-.2.575-.375t.6-.3l.225-1.65q.1-.65.588-1.1T10.825 2h2.35q.675 0 1.163.45t.587 1.1l.225 1.65q.325.125.613.3t.562.375l1.55-.65q.625-.275 1.25-.05t.975.8l1.175 2.05q.35.575.2 1.225t-.675 1.075l-1.325 1q.025.175.025.338v.674q0 .163-.05.338l1.325 1q.525.425.675 1.075t-.2 1.225l-1.2 2.05q-.35.575-.975.8t-1.25-.05l-1.5-.65q-.275.2-.575.375t-.6.3l-.225 1.65q-.1.65-.587 1.1t-1.163.45zM11 20h1.975l.35-2.65q.775-.2 1.438-.587t1.212-.938l2.475 1.025l.975-1.7l-2.15-1.625q.125-.35.175-.737T17.5 12t-.05-.787t-.175-.738l2.15-1.625l-.975-1.7l-2.475 1.05q-.55-.575-1.212-.962t-1.438-.588L13 4h-1.975l-.35 2.65q-.775.2-1.437.588t-1.213.937L5.55 7.15l-.975 1.7l2.15 1.6q-.125.375-.175.75t-.05.8q0 .4.05.775t.175.75l-2.15 1.625l.975 1.7l2.475-1.05q.55.575 1.213.963t1.437.587zm1.05-4.5q1.45 0 2.475-1.025T15.55 12t-1.025-2.475T12.05 8.5q-1.475 0-2.487 1.025T8.55 12t1.013 2.475T12.05 15.5M12 12"/></svg>}
 						/>
 						<Tab
 							id={ 'titletypography' }
-							icon = {<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M28.688 12v4h-4v9.313h-4v-9.313h-4v-4h12zM3.313 5.313h17.375v4h-6.688v16h-4v-16h-6.688v-4z"></path></svg>}
+							icon = {<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M11 22v-6h2v2h8v2h-8v2zm-8-2v-2h6v2zm3.425-6H8.5l1.1-3.075h4.825L15.5 14h2.075l-4.5-12h-2.15zM10.2 9.2l1.75-4.975h.1L13.8 9.2z"/></svg>}
 						/>
 					</TabList>
 					<TabPanel id={ 'titlegeneral' }>
@@ -663,11 +773,11 @@ class DisplayPostTypes extends Component {
 							<TabList>
 								<Tab
 									id={ 'excerptgeneral' }
-									icon={<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M29.181 19.070c-1.679-2.908-0.669-6.634 2.255-8.328l-3.145-5.447c-0.898 0.527-1.943 0.829-3.058 0.829-3.361 0-6.085-2.742-6.085-6.125h-6.289c0.008 1.044-0.252 2.103-0.811 3.070-1.679 2.908-5.411 3.897-8.339 2.211l-3.144 5.447c0.905 0.515 1.689 1.268 2.246 2.234 1.676 2.903 0.672 6.623-2.241 8.319l3.145 5.447c0.895-0.522 1.935-0.82 3.044-0.82 3.35 0 6.067 2.725 6.084 6.092h6.289c-0.003-1.034 0.259-2.080 0.811-3.038 1.676-2.903 5.399-3.894 8.325-2.219l3.145-5.447c-0.899-0.515-1.678-1.266-2.232-2.226zM16 22.479c-3.578 0-6.479-2.901-6.479-6.479s2.901-6.479 6.479-6.479c3.578 0 6.479 2.901 6.479 6.479s-2.901 6.479-6.479 6.479z"></path></svg>}
+									icon={<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M10.825 22q-.675 0-1.162-.45t-.588-1.1L8.85 18.8q-.325-.125-.612-.3t-.563-.375l-1.55.65q-.625.275-1.25.05t-.975-.8l-1.175-2.05q-.35-.575-.2-1.225t.675-1.075l1.325-1Q4.5 12.5 4.5 12.337v-.675q0-.162.025-.337l-1.325-1Q2.675 9.9 2.525 9.25t.2-1.225L3.9 5.975q.35-.575.975-.8t1.25.05l1.55.65q.275-.2.575-.375t.6-.3l.225-1.65q.1-.65.588-1.1T10.825 2h2.35q.675 0 1.163.45t.587 1.1l.225 1.65q.325.125.613.3t.562.375l1.55-.65q.625-.275 1.25-.05t.975.8l1.175 2.05q.35.575.2 1.225t-.675 1.075l-1.325 1q.025.175.025.338v.674q0 .163-.05.338l1.325 1q.525.425.675 1.075t-.2 1.225l-1.2 2.05q-.35.575-.975.8t-1.25-.05l-1.5-.65q-.275.2-.575.375t-.6.3l-.225 1.65q-.1.65-.587 1.1t-1.163.45zM11 20h1.975l.35-2.65q.775-.2 1.438-.587t1.212-.938l2.475 1.025l.975-1.7l-2.15-1.625q.125-.35.175-.737T17.5 12t-.05-.787t-.175-.738l2.15-1.625l-.975-1.7l-2.475 1.05q-.55-.575-1.212-.962t-1.438-.588L13 4h-1.975l-.35 2.65q-.775.2-1.437.588t-1.213.937L5.55 7.15l-.975 1.7l2.15 1.6q-.125.375-.175.75t-.05.8q0 .4.05.775t.175.75l-2.15 1.625l.975 1.7l2.475-1.05q.55.575 1.213.963t1.437.587zm1.05-4.5q1.45 0 2.475-1.025T15.55 12t-1.025-2.475T12.05 8.5q-1.475 0-2.487 1.025T8.55 12t1.013 2.475T12.05 15.5M12 12"/></svg>}
 								/>
 								<Tab
 									id={ 'excerpttypography' }
-									icon = {<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M28.688 12v4h-4v9.313h-4v-9.313h-4v-4h12zM3.313 5.313h17.375v4h-6.688v16h-4v-16h-6.688v-4z"></path></svg>}
+									icon = {<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M11 22v-6h2v2h8v2h-8v2zm-8-2v-2h6v2zm3.425-6H8.5l1.1-3.075h4.825L15.5 14h2.075l-4.5-12h-2.15zM10.2 9.2l1.75-4.975h.1L13.8 9.2z"/></svg>}
 								/>
 							</TabList>
 							<TabPanel id={ 'excerptgeneral' }>
@@ -711,11 +821,11 @@ class DisplayPostTypes extends Component {
 						<TabList>
 							<Tab
 								id={ 'meta1general' }
-								icon={<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M29.181 19.070c-1.679-2.908-0.669-6.634 2.255-8.328l-3.145-5.447c-0.898 0.527-1.943 0.829-3.058 0.829-3.361 0-6.085-2.742-6.085-6.125h-6.289c0.008 1.044-0.252 2.103-0.811 3.070-1.679 2.908-5.411 3.897-8.339 2.211l-3.144 5.447c0.905 0.515 1.689 1.268 2.246 2.234 1.676 2.903 0.672 6.623-2.241 8.319l3.145 5.447c0.895-0.522 1.935-0.82 3.044-0.82 3.35 0 6.067 2.725 6.084 6.092h6.289c-0.003-1.034 0.259-2.080 0.811-3.038 1.676-2.903 5.399-3.894 8.325-2.219l3.145-5.447c-0.899-0.515-1.678-1.266-2.232-2.226zM16 22.479c-3.578 0-6.479-2.901-6.479-6.479s2.901-6.479 6.479-6.479c3.578 0 6.479 2.901 6.479 6.479s-2.901 6.479-6.479 6.479z"></path></svg>}
+								icon={<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M10.825 22q-.675 0-1.162-.45t-.588-1.1L8.85 18.8q-.325-.125-.612-.3t-.563-.375l-1.55.65q-.625.275-1.25.05t-.975-.8l-1.175-2.05q-.35-.575-.2-1.225t.675-1.075l1.325-1Q4.5 12.5 4.5 12.337v-.675q0-.162.025-.337l-1.325-1Q2.675 9.9 2.525 9.25t.2-1.225L3.9 5.975q.35-.575.975-.8t1.25.05l1.55.65q.275-.2.575-.375t.6-.3l.225-1.65q.1-.65.588-1.1T10.825 2h2.35q.675 0 1.163.45t.587 1.1l.225 1.65q.325.125.613.3t.562.375l1.55-.65q.625-.275 1.25-.05t.975.8l1.175 2.05q.35.575.2 1.225t-.675 1.075l-1.325 1q.025.175.025.338v.674q0 .163-.05.338l1.325 1q.525.425.675 1.075t-.2 1.225l-1.2 2.05q-.35.575-.975.8t-1.25-.05l-1.5-.65q-.275.2-.575.375t-.6.3l-.225 1.65q-.1.65-.587 1.1t-1.163.45zM11 20h1.975l.35-2.65q.775-.2 1.438-.587t1.212-.938l2.475 1.025l.975-1.7l-2.15-1.625q.125-.35.175-.737T17.5 12t-.05-.787t-.175-.738l2.15-1.625l-.975-1.7l-2.475 1.05q-.55-.575-1.212-.962t-1.438-.588L13 4h-1.975l-.35 2.65q-.775.2-1.437.588t-1.213.937L5.55 7.15l-.975 1.7l2.15 1.6q-.125.375-.175.75t-.05.8q0 .4.05.775t.175.75l-2.15 1.625l.975 1.7l2.475-1.05q.55.575 1.213.963t1.437.587zm1.05-4.5q1.45 0 2.475-1.025T15.55 12t-1.025-2.475T12.05 8.5q-1.475 0-2.487 1.025T8.55 12t1.013 2.475T12.05 15.5M12 12"/></svg>}
 							/>
 							<Tab
 								id={ 'meta1typography' }
-								icon = {<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M28.688 12v4h-4v9.313h-4v-9.313h-4v-4h12zM3.313 5.313h17.375v4h-6.688v16h-4v-16h-6.688v-4z"></path></svg>}
+								icon = {<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M11 22v-6h2v2h8v2h-8v2zm-8-2v-2h6v2zm3.425-6H8.5l1.1-3.075h4.825L15.5 14h2.075l-4.5-12h-2.15zM10.2 9.2l1.75-4.975h.1L13.8 9.2z"/></svg>}
 							/>
 						</TabList>
 						<TabPanel id={ 'meta1general' }>
@@ -739,11 +849,11 @@ class DisplayPostTypes extends Component {
 						<TabList>
 							<Tab
 								id={ 'meta2general' }
-								icon={<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M29.181 19.070c-1.679-2.908-0.669-6.634 2.255-8.328l-3.145-5.447c-0.898 0.527-1.943 0.829-3.058 0.829-3.361 0-6.085-2.742-6.085-6.125h-6.289c0.008 1.044-0.252 2.103-0.811 3.070-1.679 2.908-5.411 3.897-8.339 2.211l-3.144 5.447c0.905 0.515 1.689 1.268 2.246 2.234 1.676 2.903 0.672 6.623-2.241 8.319l3.145 5.447c0.895-0.522 1.935-0.82 3.044-0.82 3.35 0 6.067 2.725 6.084 6.092h6.289c-0.003-1.034 0.259-2.080 0.811-3.038 1.676-2.903 5.399-3.894 8.325-2.219l3.145-5.447c-0.899-0.515-1.678-1.266-2.232-2.226zM16 22.479c-3.578 0-6.479-2.901-6.479-6.479s2.901-6.479 6.479-6.479c3.578 0 6.479 2.901 6.479 6.479s-2.901 6.479-6.479 6.479z"></path></svg>}
+								icon={<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M10.825 22q-.675 0-1.162-.45t-.588-1.1L8.85 18.8q-.325-.125-.612-.3t-.563-.375l-1.55.65q-.625.275-1.25.05t-.975-.8l-1.175-2.05q-.35-.575-.2-1.225t.675-1.075l1.325-1Q4.5 12.5 4.5 12.337v-.675q0-.162.025-.337l-1.325-1Q2.675 9.9 2.525 9.25t.2-1.225L3.9 5.975q.35-.575.975-.8t1.25.05l1.55.65q.275-.2.575-.375t.6-.3l.225-1.65q.1-.65.588-1.1T10.825 2h2.35q.675 0 1.163.45t.587 1.1l.225 1.65q.325.125.613.3t.562.375l1.55-.65q.625-.275 1.25-.05t.975.8l1.175 2.05q.35.575.2 1.225t-.675 1.075l-1.325 1q.025.175.025.338v.674q0 .163-.05.338l1.325 1q.525.425.675 1.075t-.2 1.225l-1.2 2.05q-.35.575-.975.8t-1.25-.05l-1.5-.65q-.275.2-.575.375t-.6.3l-.225 1.65q-.1.65-.587 1.1t-1.163.45zM11 20h1.975l.35-2.65q.775-.2 1.438-.587t1.212-.938l2.475 1.025l.975-1.7l-2.15-1.625q.125-.35.175-.737T17.5 12t-.05-.787t-.175-.738l2.15-1.625l-.975-1.7l-2.475 1.05q-.55-.575-1.212-.962t-1.438-.588L13 4h-1.975l-.35 2.65q-.775.2-1.437.588t-1.213.937L5.55 7.15l-.975 1.7l2.15 1.6q-.125.375-.175.75t-.05.8q0 .4.05.775t.175.75l-2.15 1.625l.975 1.7l2.475-1.05q.55.575 1.213.963t1.437.587zm1.05-4.5q1.45 0 2.475-1.025T15.55 12t-1.025-2.475T12.05 8.5q-1.475 0-2.487 1.025T8.55 12t1.013 2.475T12.05 15.5M12 12"/></svg>}
 							/>
 							<Tab
 								id={ 'meta2typography' }
-								icon = {<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M28.688 12v4h-4v9.313h-4v-9.313h-4v-4h12zM3.313 5.313h17.375v4h-6.688v16h-4v-16h-6.688v-4z"></path></svg>}
+								icon = {<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M11 22v-6h2v2h8v2h-8v2zm-8-2v-2h6v2zm3.425-6H8.5l1.1-3.075h4.825L15.5 14h2.075l-4.5-12h-2.15zM10.2 9.2l1.75-4.975h.1L13.8 9.2z"/></svg>}
 							/>
 						</TabList>
 						<TabPanel id={ 'meta2general' }>
@@ -819,8 +929,13 @@ class DisplayPostTypes extends Component {
 						{
 							'page' !== postType &&
 							<DptAccordion initialOpen={ false } title={ __( 'Filter By Taxonomy', 'display-post-types' ) }>
+								<ToggleControl
+									label={ __( 'Use multiple taxonomy rules', 'display-post-types' ) }
+									checked={ isAdvancedTaxonomy }
+									onChange={ toggleAdvancedTaxonomy }
+								/>
 								{
-									!! taxonomies.length &&
+									!! taxonomies.length && ! isAdvancedTaxonomy &&
 									<SelectControl
 										label={ __( 'Get items by Taxonomy', 'display-post-types' ) }
 										value={ taxonomy }
@@ -829,7 +944,7 @@ class DisplayPostTypes extends Component {
 									/>
 								}
 								{
-									!! termsList.length &&
+									!! termsList.length && ! isAdvancedTaxonomy &&
 									<MultipleCheckboxControl
 										listItems={ termsList }
 										selected={ terms }
@@ -838,7 +953,7 @@ class DisplayPostTypes extends Component {
 									/>
 								}
 								{
-									!! termsList.length &&
+									!! termsList.length && ! isAdvancedTaxonomy &&
 									<SelectControl
 										label={ __( 'Terms Relationship', 'display-post-types' ) }
 										value={ relation }
@@ -848,6 +963,72 @@ class DisplayPostTypes extends Component {
 											{ value: 'AND', label: __( 'AND - Show posts only if they belong to all of the selected terms.', 'display-post-types' ) },
 										] }
 									/>
+								}
+								{
+									isAdvancedTaxonomy &&
+									<div className="dpt-block-query-tax-builder">
+										<SelectControl
+											label={ __( 'Rules Relationship', 'display-post-types' ) }
+											value={ queryTaxRelation || 'AND' }
+											onChange={ ( queryTaxRelation ) => setAttributes( { queryTaxRelation } ) }
+											options={ [
+												{ value: 'AND', label: __( 'Match all rules', 'display-post-types' ) },
+												{ value: 'OR', label: __( 'Match any rule', 'display-post-types' ) },
+											] }
+										/>
+										{
+											taxRules.map((rule, index) => {
+												const ruleTaxonomy = rule.taxonomy || '';
+												const ruleTerms = Array.isArray(rule.terms) ? rule.terms : [];
+												const ruleTermOptions = ruleTaxonomy && advancedTerms[ruleTaxonomy] ? advancedTerms[ruleTaxonomy] : [];
+												return (
+													<div className="dpt-block-query-tax-rule" key={ index }>
+														<div className="dpt-block-query-tax-rule-head">
+															<strong>{ __( 'Taxonomy Rule', 'display-post-types' ) }</strong>
+															<Button
+																isLink
+																isDestructive
+																onClick={ () => removeTaxRule(index) }
+															>
+																{ __( 'Remove', 'display-post-types' ) }
+															</Button>
+														</div>
+														<SelectControl
+															label={ __( 'Taxonomy', 'display-post-types' ) }
+															value={ ruleTaxonomy }
+															options={ taxonomies }
+															onChange={ ( value ) => onChangeTaxRuleTaxonomy(index, value) }
+														/>
+														<SelectControl
+															label={ __( 'Rule Type', 'display-post-types' ) }
+															value={ rule.operator || 'IN' }
+															options={ [
+																{ value: 'IN', label: __( 'Match any selected term', 'display-post-types' ) },
+																{ value: 'AND', label: __( 'Match all selected terms', 'display-post-types' ) },
+																{ value: 'NOT IN', label: __( 'Exclude selected terms', 'display-post-types' ) },
+															] }
+															onChange={ ( operator ) => updateTaxRule(index, { operator }) }
+														/>
+														{
+															!! ruleTermOptions.length &&
+															<MultipleCheckboxControl
+																listItems={ ruleTermOptions }
+																selected={ ruleTerms }
+																onItemChange={ ( value ) => onTaxRuleTermChange(index, value) }
+																label={ __( 'Terms', 'display-post-types' ) }
+															/>
+														}
+													</div>
+												);
+											})
+										}
+										<Button
+											isSecondary
+											onClick={ addTaxRule }
+										>
+											{ __( 'Add Taxonomy Rule', 'display-post-types' ) }
+										</Button>
+									</div>
 								}
 							</DptAccordion>
 						}
@@ -897,11 +1078,33 @@ class DisplayPostTypes extends Component {
 						{
 							(styles && ifStyleSupport(styles, 'multicol')) &&
 							<RangeControl
-								label={ __( 'Maximum grid columns (Responsive)', 'display-post-types' ) }
+								label={ __( 'Desktop grid columns', 'display-post-types' ) }
 								value={ colNarr }
 								onChange={ ( colNarr ) => setAttributes( { colNarr } ) }
 								min={ 1 }
 								max={ 8 }
+							/>
+						}
+						{
+							(styles && ifStyleSupport(styles, 'multicol')) &&
+							<RangeControl
+								label={ __( 'Tablet grid columns', 'display-post-types' ) }
+								value={ colNarrTab }
+								onChange={ ( colNarrTab ) => setAttributes( { colNarrTab } ) }
+								min={ 0 }
+								max={ 8 }
+								help={ __( 'Set to 0 to use the automatic tablet layout.', 'display-post-types' ) }
+							/>
+						}
+						{
+							(styles && ifStyleSupport(styles, 'multicol')) &&
+							<RangeControl
+								label={ __( 'Mobile grid columns', 'display-post-types' ) }
+								value={ colNarrMob }
+								onChange={ ( colNarrMob ) => setAttributes( { colNarrMob } ) }
+								min={ 0 }
+								max={ 4 }
+								help={ __( 'Set to 0 to use the automatic mobile layout.', 'display-post-types' ) }
 							/>
 						}
 						<RangeControl
@@ -924,8 +1127,8 @@ class DisplayPostTypes extends Component {
 					</DptAccordion>
 					<DptAccordion initialOpen={ false } title={ __( 'Manage Item Components', 'display-post-types' ) }>
 						{
-							!! this.isPro && !! title &&
-							<DptAccordion initialOpen={ false } title={ __( 'Header', 'display-post-types' ) }>
+							!! this.isPro && ( !! title || ifStyleSupport(styles, 'hactions') ) &&
+							<DptAccordion initialOpen={ false } title={ __( 'Title & Toolbar', 'display-post-types' ) }>
 								{this.displayElems('itemHeaderOptions', {ifStyleSupport})}
 							</DptAccordion>
 						}
